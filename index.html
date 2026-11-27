@@ -25,7 +25,7 @@ body{overflow:hidden}.app{height:100dvh;display:flex;flex-direction:column;backg
 .bar{display:flex;align-items:center;gap:10px}.time{font-size:12px;color:#bbb;min-width:42px;text-align:center;font-variant-numeric:tabular-nums}
 input[type=range]{accent-color:var(--red);min-width:0;flex:1}
 .actions{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:12px;flex-wrap:wrap}
-button{background:#242424;color:#fff;border:1px solid #444;border-radius:8px;padding:10px 14px;font-size:14px;cursor:pointer;min-height:42px}
+button,select{background:#242424;color:#fff;border:1px solid #444;border-radius:8px;padding:10px 14px;font-size:14px;cursor:pointer;min-height:42px}select{max-width:180px}
 button.primary{background:var(--red);border-color:var(--red)}button:focus-visible{outline:2px solid white;outline-offset:2px}
 #volume{width:90px;flex:none}.hint{color:#777;font-size:11px;text-align:center;margin-top:10px}
 @media(max-width:600px){.top{height:48px;padding:0 13px}.controls{padding:12px}.actions{gap:7px}button{padding:9px 11px;font-size:13px}.brand{font-size:16px}}
@@ -45,9 +45,9 @@ button.primary{background:var(--red);border-color:var(--red)}button:focus-visibl
   <div class="actions">
    <button id="back">−10 s</button><button class="primary" id="play">▶ / ❚❚</button><button id="forward">+10 s</button>
    <button id="mute">Silencio</button><input id="volume" aria-label="Volumen" type="range" min="0" max="1" step=".05" value="1">
-   <button id="fullscreen">Pantalla completa</button>
+   <button id="fullscreen">Pantalla completa</button><select id="audioTrack" aria-label="Pista de audio" hidden><option value="-1">Pista de audio</option></select><button id="openVlc" title="Abrir el enlace en VLC para Android">Abrir en VLC</button>
   </div>
-  <div class="hint" id="hint">Los formatos disponibles dependen del navegador y del dispositivo.</div>
+  <div class="hint" id="hint">Si hay imagen pero no sonido, prueba «Abrir en VLC»: Android puede no admitir pistas DTS, E-AC3 o TrueHD.</div>
  </section>
 </div>
 <script>
@@ -59,7 +59,7 @@ const video=document.getElementById('video'),ytHost=document.getElementById('you
 const state=document.getElementById('state'),stateText=document.getElementById('stateText');
 const titleEl=document.getElementById('title'),sourceLabel=document.getElementById('sourceLabel');
 const seek=document.getElementById('seek'),current=document.getElementById('current'),duration=document.getElementById('duration');
-let yt=null,hls=null,turnstileId=null,tokenWait=null;
+let yt=null,hls=null,turnstileId=null,tokenWait=null,currentMediaUrl='';
 function showState(message,loading=false){state.hidden=false;stateText.textContent=message;state.querySelector('.spinner').style.display=loading?'block':'none'}
 function hideState(){state.hidden=true}
 function fmt(n){if(!Number.isFinite(n)||n<0)return '00:00';const s=Math.floor(n);return (Math.floor(s/3600)?String(Math.floor(s/3600)).padStart(2,'0')+':':'')+String(Math.floor(s%3600/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
@@ -85,6 +85,7 @@ async function getAllDebridUrl(){
  return data.url;
 }
 function playDirect(url){
+ currentMediaUrl=url;
  video.style.display='block';ytHost.style.display='none';
  if(hls){hls.destroy();hls=null}
  const isHls=/\.m3u8(?:$|\?)/i.test(url);
@@ -92,8 +93,35 @@ function playDirect(url){
  else if(video.canPlayType('application/vnd.apple.mpegurl')&&isHls){video.src=url;video.play().catch(()=>{})}
  else{video.src=url;video.play().catch(()=>showState('Pulsa reproducir. Si aparece un error de formato, el navegador no admite este códec o contenedor.',false))}
  video.onerror=()=>showState('El navegador no puede decodificar este archivo. Puede ser MKV, HEVC, DTS u otro formato/códec no compatible.',false);
- video.onplaying=hideState;
+ video.onplaying=()=>{hideState();refreshAudioTracks()};
+ video.addEventListener('loadedmetadata',refreshAudioTracks);
+ video.addEventListener('durationchange',refreshAudioTracks);
 }
+
+function refreshAudioTracks(){
+ const picker=document.getElementById('audioTrack');
+ const tracks=video.audioTracks;
+ if(!picker||!tracks||!tracks.length){if(picker)picker.hidden=true;return}
+ picker.innerHTML='';
+ for(let i=0;i<tracks.length;i++){
+  const t=tracks[i],o=document.createElement('option');o.value=String(i);
+  o.textContent=t.label||t.language||('Audio '+(i+1));picker.appendChild(o);
+  if(t.enabled)picker.value=String(i);
+ }
+ picker.hidden=tracks.length<2;
+}
+document.getElementById('audioTrack').onchange=e=>{
+ const tracks=video.audioTracks;if(!tracks)return;
+ const chosen=Number(e.target.value);
+ for(let i=0;i<tracks.length;i++)tracks[i].enabled=i===chosen;
+};
+document.getElementById('openVlc').onclick=()=>{
+ if(!currentMediaUrl){showState('Todavía no hay un enlace de AllDebrid para abrir.',false);return}
+ const clean=currentMediaUrl.replace(/^https?:\/\//i,'');
+ const intent='intent://'+clean+'#Intent;scheme=https;package=org.videolan.vlc;type=video/*;end';
+ location.href=intent;
+};
+
 function youtubeId(value){try{const u=new URL(value);if(u.hostname==='youtu.be')return u.pathname.slice(1);if(u.hostname.includes('youtube.com'))return u.searchParams.get('v')||u.pathname.split('/').filter(Boolean).pop()}catch{}return /^[\w-]{11}$/.test(value)?value:null}
 window.onYouTubeIframeAPIReady=function(){if(qs.get('source')==='youtube')startYoutube()};
 function startYoutube(){
