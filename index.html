@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#090909">
+<title>SHARKTV PLAYER</title>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+<script src="https://www.youtube.com/iframe_api"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js"></script>
+<style>
+:root{color-scheme:dark;--red:#e50914;--panel:#171717;--muted:#aaa}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#080808;color:#fff;font-family:Arial,Helvetica,sans-serif}
+body{overflow:hidden}.app{height:100dvh;display:flex;flex-direction:column;background:radial-gradient(ellipse at top,#202020 0,#090909 55%)}
+.top{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;border-bottom:1px solid #292929;flex:none}
+.brand{font-weight:900;letter-spacing:2px;font-size:19px}.brand span{color:var(--red)}.source{color:#ccc;font-size:12px}
+.stage{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;background:#000}
+#video,#youtube{width:100%;height:100%;max-height:100%;background:#000;display:none}
+#video{object-fit:contain}#youtube iframe{width:100%;height:100%;border:0}
+#youtube{width:100%;height:100%}
+.state{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:25px;color:#ddd;background:#000;z-index:2}
+.state[hidden]{display:none}.state-inner{max-width:560px}.spinner{width:38px;height:38px;border:3px solid #444;border-top-color:var(--red);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 18px}@keyframes spin{to{transform:rotate(360deg)}}
+.controls{padding:15px 20px 20px;background:#101010;border-top:1px solid #282828;flex:none}
+.title{font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0 0 12px}
+.bar{display:flex;align-items:center;gap:10px}.time{font-size:12px;color:#bbb;min-width:42px;text-align:center;font-variant-numeric:tabular-nums}
+input[type=range]{accent-color:var(--red);min-width:0;flex:1}
+.actions{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:12px;flex-wrap:wrap}
+button{background:#242424;color:#fff;border:1px solid #444;border-radius:8px;padding:10px 14px;font-size:14px;cursor:pointer;min-height:42px}
+button.primary{background:var(--red);border-color:var(--red)}button:focus-visible{outline:2px solid white;outline-offset:2px}
+#volume{width:90px;flex:none}.hint{color:#777;font-size:11px;text-align:center;margin-top:10px}
+@media(max-width:600px){.top{height:48px;padding:0 13px}.controls{padding:12px}.actions{gap:7px}button{padding:9px 11px;font-size:13px}.brand{font-size:16px}}
+</style>
+</head>
+<body>
+<div class="app">
+ <header class="top"><div class="brand">SHARK<span>TV</span> PLAYER</div><div class="source" id="sourceLabel">REPRODUCTOR</div></header>
+ <main class="stage">
+  <video id="video" playsinline controls></video>
+  <div id="youtube"></div>
+  <div class="state" id="state"><div class="state-inner"><div class="spinner"></div><div id="stateText">Preparando reproducción…</div></div></div>
+ </main>
+ <section class="controls">
+  <p class="title" id="title">SHARKTV PLAYER</p>
+  <div class="bar"><span class="time" id="current">00:00</span><input id="seek" type="range" min="0" max="1000" value="0"><span class="time" id="duration">00:00</span></div>
+  <div class="actions">
+   <button id="back">−10 s</button><button class="primary" id="play">▶ / ❚❚</button><button id="forward">+10 s</button>
+   <button id="mute">Silencio</button><input id="volume" aria-label="Volumen" type="range" min="0" max="1" step=".05" value="1">
+   <button id="fullscreen">Pantalla completa</button>
+  </div>
+  <div class="hint" id="hint">Los formatos disponibles dependen del navegador y del dispositivo.</div>
+ </section>
+</div>
+<script>
+'use strict';
+const WORKER_URL='https://alldebrid-vlc.cristorodriguez13517.workers.dev/';
+const TURNSTILE_SITE_KEY='0x4AAAAAAGK-CFVW1ivlcFRe';
+const qs=new URLSearchParams(location.search);
+const video=document.getElementById('video'),ytHost=document.getElementById('youtube');
+const state=document.getElementById('state'),stateText=document.getElementById('stateText');
+const titleEl=document.getElementById('title'),sourceLabel=document.getElementById('sourceLabel');
+const seek=document.getElementById('seek'),current=document.getElementById('current'),duration=document.getElementById('duration');
+let yt=null,hls=null,turnstileId=null,tokenWait=null;
+function showState(message,loading=false){state.hidden=false;stateText.textContent=message;state.querySelector('.spinner').style.display=loading?'block':'none'}
+function hideState(){state.hidden=true}
+function fmt(n){if(!Number.isFinite(n)||n<0)return '00:00';const s=Math.floor(n);return (Math.floor(s/3600)?String(Math.floor(s/3600)).padStart(2,'0')+':':'')+String(Math.floor(s%3600/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
+function setTitle(t){titleEl.textContent=t||'SHARKTV PLAYER';document.title=(t||'SHARKTV PLAYER')+' · SHARKTV'}
+function getToken(){
+ return new Promise(async(resolve,reject)=>{
+  const until=Date.now()+15000;while(!window.turnstile&&Date.now()<until)await new Promise(r=>setTimeout(r,100));
+  if(!window.turnstile)return reject(new Error('No se ha podido cargar la verificación de Cloudflare.'));
+  const host=document.getElementById('turnstile-host')||document.body.appendChild(Object.assign(document.createElement('div'),{id:'turnstile-host'}));
+  host.style.cssText='position:fixed;left:-10000px;top:-10000px;width:1px;height:1px;overflow:hidden';
+  if(turnstileId===null)turnstileId=window.turnstile.render(host,{sitekey:TURNSTILE_SITE_KEY,action:'reproducir',execution:'execute',size:'invisible',callback:t=>{if(tokenWait){tokenWait.resolve(t);tokenWait=null}},'error-callback':()=>{if(tokenWait){tokenWait.reject(new Error('Falló la verificación de seguridad.'));tokenWait=null}},'expired-callback':()=>{if(tokenWait){tokenWait.reject(new Error('La verificación ha caducado.'));tokenWait=null}}});
+  tokenWait={resolve,reject};window.turnstile.execute(turnstileId);
+ });
+}
+async function getAllDebridUrl(){
+ const direct=qs.get('url');if(direct)return direct;
+ const tipo=qs.get('tipo')||'movie',magnet_id=qs.get('magnet_id')||'',file_path=qs.get('file_path')||'';
+ if(!/^\d+$/.test(magnet_id)||!file_path)throw new Error('Faltan los datos de AllDebrid para preparar el enlace.');
+ const token=await getToken();
+ const res=await fetch(WORKER_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tipo,magnet_id,file_path,token})});
+ const data=await res.json().catch(()=>({}));
+ if(!res.ok||!data.url)throw new Error(data.error||'AllDebrid no ha podido generar el enlace directo.');
+ return data.url;
+}
+function playDirect(url){
+ video.style.display='block';ytHost.style.display='none';
+ if(hls){hls.destroy();hls=null}
+ const isHls=/\.m3u8(?:$|\?)/i.test(url);
+ if(isHls&&window.Hls&&Hls.isSupported()){hls=new Hls();hls.loadSource(url);hls.attachMedia(video);hls.on(Hls.Events.MANIFEST_PARSED,()=>video.play().catch(()=>{}));hls.on(Hls.Events.ERROR,(_,d)=>{if(d.fatal)showState('No se puede reproducir este flujo en este dispositivo. Prueba otro formato o reproductor.',false)})}
+ else if(video.canPlayType('application/vnd.apple.mpegurl')&&isHls){video.src=url;video.play().catch(()=>{})}
+ else{video.src=url;video.play().catch(()=>showState('Pulsa reproducir. Si aparece un error de formato, el navegador no admite este códec o contenedor.',false))}
+ video.onerror=()=>showState('El navegador no puede decodificar este archivo. Puede ser MKV, HEVC, DTS u otro formato/códec no compatible.',false);
+ video.onplaying=hideState;
+}
+function youtubeId(value){try{const u=new URL(value);if(u.hostname==='youtu.be')return u.pathname.slice(1);if(u.hostname.includes('youtube.com'))return u.searchParams.get('v')||u.pathname.split('/').filter(Boolean).pop()}catch{}return /^[\w-]{11}$/.test(value)?value:null}
+window.onYouTubeIframeAPIReady=function(){if(qs.get('source')==='youtube')startYoutube()};
+function startYoutube(){
+ const raw=qs.get('url')||qs.get('id')||'';const id=youtubeId(raw);
+ if(!id){showState('El enlace de YouTube no es válido.',false);return}
+ video.style.display='none';ytHost.style.display='block';
+ if(!window.YT||!YT.Player){setTimeout(startYoutube,250);return}
+ yt=new YT.Player('youtube',{videoId:id,playerVars:{autoplay:1,controls:1,rel:0,playsinline:1,modestbranding:1},events:{onReady:e=>{hideState();e.target.playVideo()},onError:()=>showState('YouTube no permite reproducir este vídeo aquí. Puede tener restricciones de inserción o edad.',false),onStateChange:e=>{if(e.data===1)hideState()}}});
+}
+document.getElementById('play').onclick=()=>{if(yt){yt.getPlayerState()===1?yt.pauseVideo():yt.playVideo()}else if(video.paused)video.play().catch(()=>{});else video.pause()};
+document.getElementById('back').onclick=()=>{if(yt)yt.seekTo(Math.max(0,yt.getCurrentTime()-10),true);else video.currentTime=Math.max(0,video.currentTime-10)};
+document.getElementById('forward').onclick=()=>{if(yt)yt.seekTo(yt.getCurrentTime()+10,true);else video.currentTime=Math.min(video.duration||Infinity,video.currentTime+10)};
+document.getElementById('mute').onclick=()=>{if(yt){yt.isMuted()?yt.unMute():yt.mute()}else video.muted=!video.muted};
+document.getElementById('volume').oninput=e=>{if(yt)yt.setVolume(Number(e.target.value)*100);else video.volume=Number(e.target.value)};
+document.getElementById('fullscreen').onclick=()=>{const el=document.querySelector('.stage');if(document.fullscreenElement)document.exitFullscreen?.();else el.requestFullscreen?.()};
+seek.oninput=()=>{const ratio=Number(seek.value)/1000;if(yt&&yt.getDuration)yt.seekTo(ratio*yt.getDuration(),true);else if(Number.isFinite(video.duration))video.currentTime=ratio*video.duration};
+video.addEventListener('timeupdate',()=>{if(!video.duration)return;seek.value=video.currentTime/video.duration*1000;current.textContent=fmt(video.currentTime);duration.textContent=fmt(video.duration)});
+video.addEventListener('loadedmetadata',()=>{duration.textContent=fmt(video.duration)});
+setInterval(()=>{if(yt&&yt.getCurrentTime&&yt.getDuration){const d=yt.getDuration(),c=yt.getCurrentTime();if(d){seek.value=c/d*1000;current.textContent=fmt(c);duration.textContent=fmt(d)}}},500);
+(async()=>{
+ const source=qs.get('source')||'alldebrid';const name=qs.get('title')||'SHARKTV PLAYER';setTitle(name);
+ if(source==='youtube'){sourceLabel.textContent='YOUTUBE';showState('Conectando con YouTube…',true);if(window.YT&&YT.Player)startYoutube();return}
+ sourceLabel.textContent='ALLDEBRID';showState('Solicitando enlace directo a AllDebrid…',true);
+ try{const url=await getAllDebridUrl();playDirect(url)}catch(e){showState(e.message||'No se pudo iniciar la reproducción.',false)}
+})();
+</script>
+</body></html>
